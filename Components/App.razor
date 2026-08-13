@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="FitLog.styles.css" />
+    <link rel="icon" href="data:," />
+    <HeadOutlet />
+</head>
+
+<body>
+    @*
+        Render mode is set per page rather than globally. The account pages must
+        render statically so that sign-in and sign-out can write the auth cookie
+        on a real HTTP response; a component running over a SignalR circuit has
+        already sent its headers and cannot. The data pages opt into
+        InteractiveServer individually.
+    *@
+    <Routes />
+    <script src="_framework/blazor.web.js"></script>
+</body>
+
+</html>

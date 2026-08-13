@@ -1,0 +1,32 @@
+@*
+    Displays a dismissible success or error banner.
+
+    Used by every page that touches the database so that failures surface to the
+    user as readable feedback instead of an unhandled exception page. The banner
+    is an ARIA live region, so screen readers announce it when it appears.
+*@
+
+@if (!string.IsNullOrWhiteSpace(Message))
+{
+    <div class="alert @(IsError ? "alert-error" : "alert-success")"
+         role="@(IsError ? "alert" : "status")"
+         aria-live="@(IsError ? "assertive" : "polite")">
+        <span class="alert-ico" aria-hidden="true">@(IsError ? "⚠" : "✓")</span>
+        <span class="alert-text">@Message</span>
+        @if (OnDismiss.HasDelegate)
+        {
+            <button type="button" class="alert-close" @onclick="OnDismiss" aria-label="Dismiss message">×</button>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>Text to display. Nothing renders when this is null or blank.</summary>
+    [Parameter] public string? Message { get; set; }
+
+    /// <summary>Styles the banner as an error and raises the live-region priority.</summary>
+    [Parameter] public bool IsError { get; set; }
+
+    /// <summary>Optional. When supplied, a dismiss button is shown.</summary>
+    [Parameter] public EventCallback OnDismiss { get; set; }
+}

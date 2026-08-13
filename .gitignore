@@ -1,0 +1,10 @@
+## .NET / Visual Studio
+bin/
+obj/
+.vs/
+*.user
+
+## SQLite database + EF artifacts (each dev generates their own on first run)
+*.db
+*.db-shm
+*.db-wal

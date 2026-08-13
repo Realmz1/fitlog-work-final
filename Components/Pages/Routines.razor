@@ -1,0 +1,353 @@
+@page "/routines"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IDbContextFactory<FitLogDbContext> DbFactory
+
+<PageTitle>FitLog — Routines</PageTitle>
+
+<header class="page-head">
+    <h1>Routines</h1>
+    <button class="btn btn-primary" @onclick="StartAdd">➕ New routine</button>
+</header>
+
+<StatusBanner Message="@errorMessage" IsError="true" OnDismiss="@(() => errorMessage = string.Empty)" />
+<StatusBanner Message="@message" OnDismiss="@(() => message = string.Empty)" />
+
+@if (editing is not null)
+{
+    <section class="panel form-panel">
+        <h2>@(editing.Id == 0 ? "New routine" : "Edit routine")</h2>
+        <EditForm Model="editing" OnValidSubmit="SaveRoutineAsync">
+            <DataAnnotationsValidator />
+            <div class="field">
+                <label>Name</label>
+                <InputText class="input" @bind-Value="editing.Name" />
+                <ValidationMessage For="() => editing.Name" />
+            </div>
+            <div class="field">
+                <label>Description</label>
+                <InputTextArea class="input" @bind-Value="editing.Description" rows="2" />
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn" @onclick="() => editing = null">Cancel</button>
+            </div>
+        </EditForm>
+    </section>
+}
+
+<div class="two-col">
+    <section class="panel">
+        <h2>Your routines</h2>
+        @if (loading)
+        {
+            <p class="muted">Loading…</p>
+        }
+        else if (routines.Count == 0)
+        {
+            <p class="muted">No routines yet.</p>
+        }
+        else
+        {
+            <ul class="list">
+                @foreach (var r in routines)
+                {
+                    <li class="list-item @(r.Id == selectedId ? "selected" : "")"
+                        @onclick="() => SelectAsync(r.Id)">
+                        <div>
+                            <strong>@r.Name</strong>
+                            <span class="muted small">@r.RoutineExercises.Count exercises</span>
+                        </div>
+                        <button class="btn btn-sm btn-danger" @onclick:stopPropagation="true"
+                                @onclick="() => DeleteRoutineAsync(r)">Delete</button>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="panel">
+        @if (selected is null)
+        {
+            <h2>Details</h2>
+            <p class="muted">Select a routine to manage its exercises.</p>
+        }
+        else
+        {
+            <h2>@selected.Name</h2>
+            @if (!string.IsNullOrWhiteSpace(selected.Description))
+            {
+                <p class="muted">@selected.Description</p>
+            }
+
+            @if (selected.RoutineExercises.Count == 0)
+            {
+                <p class="muted">No exercises in this routine yet.</p>
+            }
+            else
+            {
+                <table class="table">
+                    <thead>
+                        <tr><th>#</th><th>Exercise</th><th class="num">Sets</th><th class="num">Reps</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var re in selected.RoutineExercises.OrderBy(x => x.Order))
+                        {
+                            <tr>
+                                <td>@re.Order</td>
+                                <td>@re.Exercise?.Name</td>
+                                <td class="num">@re.TargetSets</td>
+                                <td class="num">@re.TargetReps</td>
+                                <td class="row-actions">
+                                    <button class="btn btn-sm btn-danger"
+                                            @onclick="() => RemoveExerciseAsync(re.Id)">Remove</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            <div class="add-exercise">
+                <h3>Add exercise</h3>
+                <div class="field-row">
+                    <div class="field">
+                        <label>Exercise</label>
+                        <select class="input" @bind="newExerciseId">
+                            <option value="0" disabled>Choose…</option>
+                            @foreach (var ex in allExercises)
+                            {
+                                <option value="@ex.Id">@ex.Name</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>Sets</label>
+                        <input type="number" class="input" @bind="newSets" min="1" />
+                    </div>
+                    <div class="field">
+                        <label>Reps</label>
+                        <input type="number" class="input" @bind="newReps" min="1" />
+                    </div>
+                </div>
+                <button class="btn btn-primary" disabled="@(newExerciseId == 0)"
+                        @onclick="AddExerciseAsync">Add to routine</button>
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private List<Routine> routines = new();
+    private List<Exercise> allExercises = new();
+    private Routine? editing;
+    private Routine? selected;
+    private int selectedId;
+    private bool loading = true;
+    private string message = string.Empty;
+    private string errorMessage = string.Empty;
+
+    private int newExerciseId;
+    private int newSets = 3;
+    private int newReps = 10;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            routines = await db.Routines
+                .Include(r => r.RoutineExercises)
+                .OrderBy(r => r.Name)
+                .ToListAsync();
+            allExercises = await db.Exercises
+                .Where(e => !e.IsArchived)
+                .OrderBy(e => e.Name)
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not load your routines. " + ex.Message;
+            routines = new();
+            allExercises = new();
+        }
+        finally
+        {
+            loading = false;
+        }
+
+        if (selectedId != 0)
+            await SelectAsync(selectedId);
+    }
+
+    private void StartAdd() => editing = new Routine();
+
+    private async Task SaveRoutineAsync()
+    {
+        if (editing is null) return;
+        ClearMessages();
+
+        if (string.IsNullOrWhiteSpace(editing.Name))
+        {
+            errorMessage = "Give the routine a name before saving.";
+            return;
+        }
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            if (editing.Id == 0)
+                db.Routines.Add(editing);
+            else
+                db.Routines.Update(editing);
+
+            await db.SaveChangesAsync();
+            message = $"Saved \"{editing.Name}\".";
+            editing = null;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "The routine could not be saved. " + (ex.InnerException?.Message ?? ex.Message);
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task SelectAsync(int id)
+    {
+        selectedId = id;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            selected = await db.Routines
+                .Include(r => r.RoutineExercises)
+                    .ThenInclude(re => re.Exercise)
+                .FirstOrDefaultAsync(r => r.Id == id);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not open that routine. " + ex.Message;
+            selected = null;
+        }
+    }
+
+    private async Task AddExerciseAsync()
+    {
+        ClearMessages();
+
+        if (selected is null)
+        {
+            errorMessage = "Select a routine first.";
+            return;
+        }
+
+        if (newExerciseId == 0)
+        {
+            errorMessage = "Choose an exercise to add.";
+            return;
+        }
+
+        if (selected.RoutineExercises.Any(re => re.ExerciseId == newExerciseId))
+        {
+            errorMessage = "That exercise is already in this routine.";
+            return;
+        }
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var nextOrder = await db.RoutineExercises
+                .Where(re => re.RoutineId == selected.Id)
+                .Select(re => (int?)re.Order)
+                .MaxAsync() ?? 0;
+
+            db.RoutineExercises.Add(new RoutineExercise
+            {
+                RoutineId = selected.Id,
+                ExerciseId = newExerciseId,
+                Order = nextOrder + 1,
+                TargetSets = newSets,
+                TargetReps = newReps
+            });
+            await db.SaveChangesAsync();
+            message = "Exercise added to the routine.";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not add that exercise. " + (ex.InnerException?.Message ?? ex.Message);
+        }
+
+        newExerciseId = 0;
+        newSets = 3;
+        newReps = 10;
+        await LoadAsync();
+    }
+
+    private async Task RemoveExerciseAsync(int routineExerciseId)
+    {
+        ClearMessages();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var re = await db.RoutineExercises.FindAsync(routineExerciseId);
+            if (re is null)
+            {
+                errorMessage = "That exercise was already removed from the routine.";
+            }
+            else
+            {
+                db.RoutineExercises.Remove(re);
+                await db.SaveChangesAsync();
+                message = "Exercise removed from the routine.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not remove that exercise. " + ex.Message;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task DeleteRoutineAsync(Routine r)
+    {
+        ClearMessages();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var tracked = await db.Routines.FindAsync(r.Id);
+            if (tracked is null)
+            {
+                errorMessage = $"\"{r.Name}\" no longer exists. The list has been refreshed.";
+            }
+            else
+            {
+                db.Routines.Remove(tracked);
+                await db.SaveChangesAsync();
+                message = $"Deleted \"{r.Name}\".";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not delete that routine. " + (ex.InnerException?.Message ?? ex.Message);
+        }
+
+        if (selectedId == r.Id)
+        {
+            selected = null;
+            selectedId = 0;
+        }
+        await LoadAsync();
+    }
+
+    private void ClearMessages()
+    {
+        message = string.Empty;
+        errorMessage = string.Empty;
+    }
+}

@@ -1,0 +1,212 @@
+@page "/history"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IDbContextFactory<FitLogDbContext> DbFactory
+
+<PageTitle>FitLog — History</PageTitle>
+
+<header class="page-head">
+    <h1>History</h1>
+</header>
+
+<StatusBanner Message="@errorMessage" IsError="true" OnDismiss="@(() => errorMessage = string.Empty)" />
+<StatusBanner Message="@message" OnDismiss="@(() => message = string.Empty)" />
+
+<div class="filters">
+    <div class="filter">
+        <label>Exercise</label>
+        <select class="input" @bind="filterExerciseId">
+            <option value="0">All exercises</option>
+            @foreach (var ex in exercises)
+            {
+                <option value="@ex.Id">@ex.Name</option>
+            }
+        </select>
+    </div>
+
+    <div class="filter">
+        <label>Muscle group</label>
+        <select class="input" @bind="FilterMuscleGroupText">
+            <option value="">All groups</option>
+            @foreach (var mg in Enum.GetValues<MuscleGroup>())
+            {
+                <option value="@mg">@mg</option>
+            }
+        </select>
+    </div>
+
+    <div class="filter">
+        <label>From</label>
+        <input type="date" class="input" @bind="filterFrom" />
+    </div>
+
+    <div class="filter">
+        <label>To</label>
+        <input type="date" class="input" @bind="filterTo" />
+    </div>
+
+    <div class="filter">
+        <label>&nbsp;</label>
+        <button class="btn" @onclick="ClearFilters" disabled="@(!FiltersActive)">Clear filters</button>
+    </div>
+</div>
+
+@if (!loading && FiltersActive)
+{
+    <p class="muted filter-summary">
+        Showing @FilteredLogs.Count @Plural(FilteredLogs.Count, "set")
+        across @Grouped.Count @Plural(Grouped.Count, "day")
+        — total volume <strong>@FilteredLogs.Sum(l => l.Volume).ToString("N0")</strong>
+    </p>
+}
+
+@if (loading)
+{
+    <p class="muted">Loading…</p>
+}
+else if (Grouped.Count == 0 && FiltersActive)
+{
+    <p class="muted">No sets match these filters. Try widening the date range or clearing the filters.</p>
+}
+else if (Grouped.Count == 0)
+{
+    <p class="muted">No logged sets yet. <a href="log">Log your first workout →</a></p>
+}
+else
+{
+    @foreach (var day in Grouped)
+    {
+        <section class="panel">
+            <h2>@day.Key.ToString("dddd, MMM d, yyyy")</h2>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Exercise</th><th class="num">Sets×Reps</th>
+                        <th class="num">Weight</th><th class="num">Volume</th><th>Notes</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var l in day.OrderBy(x => x.Exercise?.Name))
+                    {
+                        <tr>
+                            <td>@l.Exercise?.Name</td>
+                            <td class="num">@l.Sets×@l.Reps</td>
+                            <td class="num">@l.Weight.ToString("N0")</td>
+                            <td class="num">@l.Volume.ToString("N0")</td>
+                            <td class="muted">@l.Notes</td>
+                            <td class="row-actions">
+                                <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(l.Id)">Delete</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+}
+
+@code {
+    private List<LogEntry> logs = new();
+    private List<Exercise> exercises = new();
+    private int filterExerciseId;
+    private MuscleGroup? filterMuscleGroup;
+    private DateTime? filterFrom;
+
+    private DateTime? filterTo;
+    private bool loading = true;
+    private string message = string.Empty;
+    private string errorMessage = string.Empty;
+
+    /// <summary>
+    /// The muscle-group dropdown binds to a string rather than to MuscleGroup?
+    /// directly, so the "All groups" option (an empty value) maps cleanly to null.
+    /// </summary>
+    private string FilterMuscleGroupText
+    {
+        get => filterMuscleGroup?.ToString() ?? string.Empty;
+        set => filterMuscleGroup = Enum.TryParse<MuscleGroup>(value, out var mg)
+            ? mg
+            : null;
+    }
+
+    /// <summary>True when any filter is narrowing the list, which enables "Clear filters".</summary>
+    private bool FiltersActive =>
+        filterExerciseId != 0 || filterMuscleGroup is not null
+        || filterFrom is not null || filterTo is not null;
+
+    /// <summary>All filters applied, before grouping by day.</summary>
+    private List<LogEntry> FilteredLogs => logs
+        .Where(l => filterExerciseId == 0 || l.ExerciseId == filterExerciseId)
+        .Where(l => filterMuscleGroup is null || l.Exercise?.MuscleGroup == filterMuscleGroup)
+        .Where(l => filterFrom is null || l.Date.Date >= filterFrom.Value.Date)
+        .Where(l => filterTo is null || l.Date.Date <= filterTo.Value.Date)
+        .ToList();
+
+    private List<IGrouping<DateTime, LogEntry>> Grouped => FilteredLogs
+        .GroupBy(l => l.Date.Date)
+        .OrderByDescending(g => g.Key)
+        .ToList();
+
+    private static string Plural(int count, string word) => count == 1 ? word : word + "s";
+
+    private void ClearFilters()
+    {
+        filterExerciseId = 0;
+        filterMuscleGroup = null;
+        filterFrom = null;
+        filterTo = null;
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            logs = await db.LogEntries
+                .Include(l => l.Exercise)
+                .OrderByDescending(l => l.Date)
+                .ToListAsync();
+            exercises = await db.Exercises.OrderBy(e => e.Name).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not load your workout history. " + ex.Message;
+            logs = new();
+            exercises = new();
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        message = string.Empty;
+        errorMessage = string.Empty;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var log = await db.LogEntries.FindAsync(id);
+            if (log is null)
+            {
+                errorMessage = "That set was already deleted. The list has been refreshed.";
+            }
+            else
+            {
+                db.LogEntries.Remove(log);
+                await db.SaveChangesAsync();
+                message = "Set deleted.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not delete that set. " + (ex.InnerException?.Message ?? ex.Message);
+        }
+
+        await LoadAsync();
+    }
+}

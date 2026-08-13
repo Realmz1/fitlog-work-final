@@ -1,0 +1,45 @@
+@inherits LayoutComponentBase
+
+@*
+    Application shell. The ErrorBoundary is the last line of defence: if a page
+    throws something that wasn't caught locally, the user sees a recoverable
+    message instead of a blank screen or a raw exception page.
+*@
+
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<div class="page">
+    <aside class="sidebar">
+        <NavMenu />
+    </aside>
+
+    <main class="main" id="main-content">
+        <article class="content">
+            <ErrorBoundary @ref="errorBoundary">
+                <ChildContent>
+                    @Body
+                </ChildContent>
+                <ErrorContent>
+                    <section class="panel error-panel" role="alert">
+                        <h2>Something went wrong</h2>
+                        <p>
+                            This page ran into an unexpected problem. Your saved data
+                            has not been affected.
+                        </p>
+                        <button class="btn btn-primary" @onclick="Recover">Try again</button>
+                    </section>
+                </ErrorContent>
+            </ErrorBoundary>
+        </article>
+    </main>
+</div>
+
+@code {
+    private ErrorBoundary? errorBoundary;
+
+    /// <summary>Clears the caught exception so the user can retry without a full reload.</summary>
+    private void Recover() => errorBoundary?.Recover();
+
+    /// <summary>Reset the boundary whenever the user navigates to a new page.</summary>
+    protected override void OnParametersSet() => errorBoundary?.Recover();
+}

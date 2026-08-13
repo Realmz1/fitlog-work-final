@@ -1,0 +1,241 @@
+@page "/exercises"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IDbContextFactory<FitLogDbContext> DbFactory
+
+<PageTitle>FitLog — Exercises</PageTitle>
+
+<header class="page-head">
+    <h1>Exercise Library</h1>
+    <button class="btn btn-primary" @onclick="StartAdd">➕ New exercise</button>
+</header>
+
+<div class="filters">
+    <input class="input" placeholder="Search…" @bind="search" @bind:event="oninput" />
+    <select class="input" @bind="filterGroup">
+        <option value="">All muscle groups</option>
+        @foreach (var g in Enum.GetValues<MuscleGroup>())
+        {
+            <option value="@g">@g</option>
+        }
+    </select>
+</div>
+
+@if (editing is not null)
+{
+    <section class="panel form-panel">
+        <h2>@(editing.Id == 0 ? "New exercise" : "Edit exercise")</h2>
+        <EditForm Model="editing" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="field">
+                <label>Name</label>
+                <InputText class="input" @bind-Value="editing.Name" />
+                <ValidationMessage For="() => editing.Name" />
+            </div>
+            <div class="field">
+                <label>Muscle group</label>
+                <InputSelect class="input" @bind-Value="editing.MuscleGroup">
+                    @foreach (var g in Enum.GetValues<MuscleGroup>())
+                    {
+                        <option value="@g">@g</option>
+                    }
+                </InputSelect>
+            </div>
+            <div class="field">
+                <label>Notes</label>
+                <InputTextArea class="input" @bind-Value="editing.Notes" rows="2" />
+                <ValidationMessage For="() => editing.Notes" />
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn" @onclick="Cancel">Cancel</button>
+            </div>
+        </EditForm>
+    </section>
+}
+
+@if (loading)
+{
+    <p class="muted">Loading…</p>
+}
+else if (Filtered.Count == 0)
+{
+    <p class="muted">No exercises match. Add one to get started.</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr><th>Name</th><th>Muscle group</th><th>Notes</th><th></th></tr>
+        </thead>
+        <tbody>
+            @foreach (var ex in Filtered)
+            {
+                <tr class="@(ex.IsArchived ? "archived" : "")">
+                    <td>@ex.Name @(ex.IsArchived ? "(archived)" : "")</td>
+                    <td><span class="chip">@ex.MuscleGroup</span></td>
+                    <td class="muted">@ex.Notes</td>
+                    <td class="row-actions">
+                        <button class="btn btn-sm" @onclick="() => StartEdit(ex)">Edit</button>
+                        <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(ex)">Delete</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+<StatusBanner Message="@errorMessage" IsError="true" OnDismiss="@(() => errorMessage = string.Empty)" />
+<StatusBanner Message="@message" OnDismiss="@(() => message = string.Empty)" />
+
+@code {
+    private List<Exercise> exercises = new();
+    private Exercise? editing;
+    private bool loading = true;
+    private string search = string.Empty;
+    private string filterGroup = string.Empty;
+    private string message = string.Empty;
+    private string errorMessage = string.Empty;
+
+    private List<Exercise> Filtered => exercises
+        .Where(e => string.IsNullOrWhiteSpace(search)
+                    || e.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+        .Where(e => string.IsNullOrEmpty(filterGroup)
+                    || e.MuscleGroup.ToString() == filterGroup)
+        .OrderBy(e => e.Name)
+        .ToList();
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            exercises = await db.Exercises.OrderBy(e => e.Name).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not load your exercises. " + ex.Message;
+            exercises = new();
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void StartAdd() => editing = new Exercise();
+
+    private void StartEdit(Exercise ex) =>
+        editing = new Exercise
+        {
+            Id = ex.Id,
+            Name = ex.Name,
+            MuscleGroup = ex.MuscleGroup,
+            Notes = ex.Notes,
+            IsArchived = ex.IsArchived
+        };
+
+    private void Cancel() => editing = null;
+
+    private async Task SaveAsync()
+    {
+        if (editing is null) return;
+
+        ClearMessages();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            // Reject a duplicate name up front so the user gets a clear reason
+            // rather than a database-level unique/constraint failure later.
+            var nameTaken = await db.Exercises.AnyAsync(e =>
+                e.Id != editing.Id && e.Name.ToLower() == editing.Name.ToLower());
+
+            if (nameTaken)
+            {
+                errorMessage = $"An exercise named \"{editing.Name}\" already exists.";
+                return;
+            }
+
+            if (editing.Id == 0)
+            {
+                db.Exercises.Add(editing);
+                message = $"Added \"{editing.Name}\".";
+            }
+            else
+            {
+                db.Exercises.Update(editing);
+                message = $"Updated \"{editing.Name}\".";
+            }
+
+            await db.SaveChangesAsync();
+            editing = null;
+        }
+        catch (DbUpdateException ex)
+        {
+            message = string.Empty;
+            errorMessage = "The exercise could not be saved. " + (ex.InnerException?.Message ?? ex.Message);
+        }
+        catch (Exception ex)
+        {
+            message = string.Empty;
+            errorMessage = "Something went wrong while saving. " + ex.Message;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(Exercise ex)
+    {
+        ClearMessages();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            // If the exercise has history, archive instead of deleting (the FK is
+            // Restrict, so a hard delete would throw anyway).
+            var hasHistory = await db.LogEntries.AnyAsync(l => l.ExerciseId == ex.Id)
+                             || await db.RoutineExercises.AnyAsync(re => re.ExerciseId == ex.Id);
+
+            var tracked = await db.Exercises.FindAsync(ex.Id);
+            if (tracked is null)
+            {
+                errorMessage = $"\"{ex.Name}\" no longer exists. The list has been refreshed.";
+                await LoadAsync();
+                return;
+            }
+
+            if (hasHistory)
+            {
+                tracked.IsArchived = true;
+                await db.SaveChangesAsync();
+                message = $"\"{ex.Name}\" has history, so it was archived instead of deleted.";
+            }
+            else
+            {
+                db.Exercises.Remove(tracked);
+                await db.SaveChangesAsync();
+                message = $"Deleted \"{ex.Name}\".";
+            }
+        }
+        catch (DbUpdateException)
+        {
+            errorMessage = $"\"{ex.Name}\" is still referenced by a routine or a logged set, so it can't be removed.";
+        }
+        catch (Exception e)
+        {
+            errorMessage = "Something went wrong while deleting. " + e.Message;
+        }
+
+        await LoadAsync();
+    }
+
+    private void ClearMessages()
+    {
+        message = string.Empty;
+        errorMessage = string.Empty;
+    }
+}

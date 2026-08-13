@@ -1,0 +1,127 @@
+@page "/Account/Login"
+@layout AuthLayout
+
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Identity
+@inject SignInManager<IdentityUser> SignInManager
+@inject ILogger<Login> Logger
+@inject NavigationManager Nav
+
+@*
+    This page deliberately has no @rendermode. It renders statically so the form
+    POST is a real HTTP request, which is what lets Identity write the
+    authentication cookie to the response.
+*@
+
+<PageTitle>Sign in — FitLog</PageTitle>
+
+<div class="auth-card">
+    <div class="auth-brand">
+        <span class="brand-mark" aria-hidden="true">💪</span>
+        <span class="brand-name">FitLog</span>
+    </div>
+
+    <h1>Sign in</h1>
+    <p class="muted">Track your workouts, routines, and progress.</p>
+
+    <StatusBanner Message="@errorMessage" IsError="true" />
+
+    <EditForm Model="Input" method="post" OnValidSubmit="LoginUserAsync" FormName="login">
+        <DataAnnotationsValidator />
+
+        <div class="field">
+            <label for="email">Email</label>
+            <InputText id="email" class="input" @bind-Value="Input.Email"
+                       autocomplete="username" aria-required="true" placeholder="you@example.com" />
+            <ValidationMessage For="() => Input.Email" class="field-error" />
+        </div>
+
+        <div class="field">
+            <label for="password">Password</label>
+            <InputText id="password" type="password" class="input" @bind-Value="Input.Password"
+                       autocomplete="current-password" aria-required="true" />
+            <ValidationMessage For="() => Input.Password" class="field-error" />
+        </div>
+
+        <div class="field field-check">
+            <InputCheckbox id="remember" @bind-Value="Input.RememberMe" />
+            <label for="remember">Keep me signed in</label>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+    </EditForm>
+
+    <p class="auth-alt">
+        No account yet?
+        <a href="@(string.IsNullOrEmpty(ReturnUrl) ? "Account/Register" : $"Account/Register?returnUrl={Uri.EscapeDataString(ReturnUrl)}")">
+            Create one
+        </a>
+    </p>
+</div>
+
+@code {
+    [SupplyParameterFromForm]
+    private LoginInput Input { get; set; } = new();
+
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    private string? ReturnUrl { get; set; }
+
+    private string errorMessage = string.Empty;
+
+    private async Task LoginUserAsync()
+    {
+        errorMessage = string.Empty;
+
+        try
+        {
+            // lockoutOnFailure protects against password guessing.
+            var result = await SignInManager.PasswordSignInAsync(
+                Input.Email, Input.Password, Input.RememberMe, lockoutOnFailure: true);
+
+            if (result.Succeeded)
+            {
+                Logger.LogInformation("User signed in.");
+                Nav.NavigateTo(SafeReturnUrl());
+                return;
+            }
+
+            if (result.IsLockedOut)
+            {
+                errorMessage = "This account is temporarily locked after too many failed attempts. Try again in a few minutes.";
+                return;
+            }
+
+            // Deliberately vague: don't reveal whether the email exists.
+            errorMessage = "That email and password combination didn't work.";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Sign-in failed unexpectedly.");
+            errorMessage = "Something went wrong while signing you in. Please try again.";
+        }
+    }
+
+    /// <summary>
+    /// Only allow relative redirects, so a crafted returnUrl can't bounce the
+    /// user to an external site after login (open-redirect protection).
+    /// </summary>
+    private string SafeReturnUrl()
+    {
+        if (string.IsNullOrWhiteSpace(ReturnUrl)) return "/";
+        if (ReturnUrl.StartsWith("//") || ReturnUrl.Contains("://")) return "/";
+        return ReturnUrl.StartsWith('/') ? ReturnUrl : "/" + ReturnUrl;
+    }
+
+    private sealed class LoginInput
+    {
+        [Required(ErrorMessage = "Enter your email address.")]
+        [EmailAddress(ErrorMessage = "That doesn't look like a valid email address.")]
+        public string Email { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Enter your password.")]
+        [DataType(DataType.Password)]
+        public string Password { get; set; } = string.Empty;
+
+        public bool RememberMe { get; set; }
+    }
+}

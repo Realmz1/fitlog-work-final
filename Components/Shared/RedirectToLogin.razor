@@ -1,0 +1,16 @@
+@*
+    Sends an unauthenticated visitor to the login page, preserving the address
+    they were trying to reach so they land back there after signing in.
+*@
+
+@inject NavigationManager Nav
+
+@code {
+    protected override void OnInitialized()
+    {
+        var returnUrl = Uri.EscapeDataString(
+            Nav.ToBaseRelativePath(Nav.Uri));
+
+        Nav.NavigateTo($"Account/Login?returnUrl={returnUrl}", forceLoad: true);
+    }
+}

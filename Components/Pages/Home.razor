@@ -1,0 +1,219 @@
+@page "/"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IDbContextFactory<FitLogDbContext> DbFactory
+
+<PageTitle>FitLog — Dashboard</PageTitle>
+
+<header class="page-head">
+    <h1>Dashboard</h1>
+    <a class="btn btn-primary" href="log">➕ Log a workout</a>
+</header>
+
+<StatusBanner Message="@errorMessage" IsError="true" OnDismiss="@(() => errorMessage = string.Empty)" />
+
+@if (loading)
+{
+    <p class="muted">Loading your stats…</p>
+}
+else
+{
+    <section class="stat-grid">
+        <div class="stat-card">
+            <span class="stat-value">@totalSessions</span>
+            <span class="stat-label">Total sessions</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value">@currentStreak</span>
+            <span class="stat-label">Day streak 🔥</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value">@sessionsThisWeek</span>
+            <span class="stat-label">This week</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value">@totalVolume.ToString("N0")</span>
+            <span class="stat-label">Volume (7d)</span>
+        </div>
+    </section>
+
+    <div class="two-col">
+        <section class="panel">
+            <h2>Volume — last 14 days</h2>
+            @if (volumeByDay.Count == 0)
+            {
+                <p class="muted">No logged sets yet. Log a workout to see your chart.</p>
+            }
+            else
+            {
+                var max = volumeByDay.Max(d => d.Volume);
+                <div class="chart" role="img" aria-label="Daily training volume for the last 14 days">
+                    @foreach (var day in volumeByDay)
+                    {
+                        var pct = max > 0 ? (int)Math.Round(day.Volume / max * 100) : 0;
+                        var tip = $"{day.Date:MMM d}: {day.Volume:N0} volume";
+                        <div class="chart-col" title="@tip">
+                            <div class="chart-bar" style="height:@(pct)%"></div>
+                            <span class="chart-x">@day.Date.ToString("M/d")</span>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+
+        <section class="panel">
+            <h2>Volume by muscle group — last 30 days</h2>
+            @if (volumeByGroup.Count == 0)
+            {
+                <p class="muted">No logged sets in the last 30 days.</p>
+            }
+            else
+            {
+                var groupMax = volumeByGroup.Max(g => g.Volume);
+                <div class="hbars">
+                    @foreach (var g in volumeByGroup)
+                    {
+                        var pct = groupMax > 0 ? (int)Math.Round(g.Volume / groupMax * 100) : 0;
+                        <div class="hbar-row">
+                            <span class="hbar-label">@g.Group</span>
+                            <div class="hbar-track">
+                                <div class="hbar-fill" style="width:@(pct)%"></div>
+                            </div>
+                            <span class="hbar-value">@g.Volume.ToString("N0")</span>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+    </div>
+
+    <section class="panel">
+        <h2>Personal records</h2>
+        @if (personalRecords.Count == 0)
+        {
+            <p class="muted">No records yet.</p>
+        }
+        else
+        {
+            <table class="table">
+                <thead>
+                    <tr><th>Exercise</th><th class="num">Best weight</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var pr in personalRecords)
+                    {
+                        <tr>
+                            <td>@pr.Name</td>
+                            <td class="num">@pr.MaxWeight.ToString("N0")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+}
+
+@code {
+    private bool loading = true;
+    private string errorMessage = string.Empty;
+
+    private int totalSessions;
+    private int currentStreak;
+    private int sessionsThisWeek;
+    private double totalVolume;
+
+    private List<DayVolume> volumeByDay = new();
+    private List<PrRow> personalRecords = new();
+    private List<GroupVolume> volumeByGroup = new();
+
+    private record DayVolume(DateTime Date, double Volume);
+    private record PrRow(string Name, double MaxWeight);
+    private record GroupVolume(MuscleGroup Group, double Volume);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await LoadDashboardAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not load your dashboard data. " + ex.Message;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task LoadDashboardAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var logs = await db.LogEntries
+            .Include(l => l.Exercise)
+            .OrderBy(l => l.Date)
+            .ToListAsync();
+
+        // Distinct workout days.
+        var workoutDays = logs.Select(l => l.Date.Date).Distinct().OrderByDescending(d => d).ToList();
+        totalSessions = workoutDays.Count;
+
+        // Current streak: consecutive days with a workout, counting back from the
+        // most recent workout day (today or yesterday counts as "current").
+        currentStreak = CalculateStreak(workoutDays);
+
+        var weekAgo = DateTime.Today.AddDays(-6);
+        sessionsThisWeek = workoutDays.Count(d => d >= weekAgo);
+        totalVolume = logs.Where(l => l.Date.Date >= weekAgo).Sum(l => l.Volume);
+
+        // 14-day volume series (fill empty days with zero so the chart is continuous).
+        var start = DateTime.Today.AddDays(-13);
+        var byDay = logs
+            .Where(l => l.Date.Date >= start)
+            .GroupBy(l => l.Date.Date)
+            .ToDictionary(g => g.Key, g => g.Sum(l => l.Volume));
+        for (var d = start; d <= DateTime.Today; d = d.AddDays(1))
+            volumeByDay.Add(new DayVolume(d, byDay.TryGetValue(d, out var v) ? v : 0));
+
+        // Volume per muscle group over the last 30 days. Groups with no work in
+        // the window are left out rather than shown as empty rows.
+        var monthAgo = DateTime.Today.AddDays(-29);
+        volumeByGroup = logs
+            .Where(l => l.Date.Date >= monthAgo && l.Exercise is not null)
+            .GroupBy(l => l.Exercise!.MuscleGroup)
+            .Select(g => new GroupVolume(g.Key, g.Sum(l => l.Volume)))
+            .Where(g => g.Volume > 0)
+            .OrderByDescending(g => g.Volume)
+            .ToList();
+
+        // Personal records: heaviest weight ever logged per exercise.
+        personalRecords = logs
+            .Where(l => l.Exercise is not null)
+            .GroupBy(l => l.Exercise!.Name)
+            .Select(g => new PrRow(g.Key, g.Max(l => l.Weight)))
+            .OrderByDescending(p => p.MaxWeight)
+            .ToList();
+    }
+
+    private static int CalculateStreak(List<DateTime> workoutDaysDescending)
+    {
+        if (workoutDaysDescending.Count == 0)
+            return 0;
+
+        var mostRecent = workoutDaysDescending[0];
+        // Only count as an active streak if the last workout was today or yesterday.
+        if ((DateTime.Today - mostRecent).TotalDays > 1)
+            return 0;
+
+        var streak = 1;
+        for (var i = 1; i < workoutDaysDescending.Count; i++)
+        {
+            if ((workoutDaysDescending[i - 1] - workoutDaysDescending[i]).TotalDays == 1)
+                streak++;
+            else
+                break;
+        }
+        return streak;
+    }
+}

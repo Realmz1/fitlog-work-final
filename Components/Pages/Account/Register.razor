@@ -1,0 +1,126 @@
+@page "/Account/Register"
+@layout AuthLayout
+
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Identity
+@inject UserManager<IdentityUser> UserManager
+@inject SignInManager<IdentityUser> SignInManager
+@inject ILogger<Register> Logger
+@inject NavigationManager Nav
+
+@* Static render (no @rendermode) so the sign-in cookie can be written. *@
+
+<PageTitle>Create account — FitLog</PageTitle>
+
+<div class="auth-card">
+    <div class="auth-brand">
+        <span class="brand-mark" aria-hidden="true">💪</span>
+        <span class="brand-name">FitLog</span>
+    </div>
+
+    <h1>Create your account</h1>
+    <p class="muted">It takes a few seconds. No email confirmation needed.</p>
+
+    <StatusBanner Message="@errorMessage" IsError="true" />
+
+    <EditForm Model="Input" method="post" OnValidSubmit="RegisterUserAsync" FormName="register">
+        <DataAnnotationsValidator />
+
+        <div class="field">
+            <label for="email">Email</label>
+            <InputText id="email" class="input" @bind-Value="Input.Email"
+                       autocomplete="username" aria-required="true" placeholder="you@example.com" />
+            <ValidationMessage For="() => Input.Email" class="field-error" />
+        </div>
+
+        <div class="field">
+            <label for="password">Password</label>
+            <InputText id="password" type="password" class="input" @bind-Value="Input.Password"
+                       autocomplete="new-password" aria-required="true" aria-describedby="pw-hint" />
+            <span id="pw-hint" class="field-hint">At least 6 characters.</span>
+            <ValidationMessage For="() => Input.Password" class="field-error" />
+        </div>
+
+        <div class="field">
+            <label for="confirm">Confirm password</label>
+            <InputText id="confirm" type="password" class="input" @bind-Value="Input.ConfirmPassword"
+                       autocomplete="new-password" aria-required="true" />
+            <ValidationMessage For="() => Input.ConfirmPassword" class="field-error" />
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Create account</button>
+    </EditForm>
+
+    <p class="auth-alt">
+        Already have an account? <a href="Account/Login">Sign in</a>
+    </p>
+</div>
+
+@code {
+    [SupplyParameterFromForm]
+    private RegisterInput Input { get; set; } = new();
+
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    private string? ReturnUrl { get; set; }
+
+    private string errorMessage = string.Empty;
+
+    private async Task RegisterUserAsync()
+    {
+        errorMessage = string.Empty;
+
+        try
+        {
+            var user = new IdentityUser
+            {
+                UserName = Input.Email,
+                Email = Input.Email
+            };
+
+            var result = await UserManager.CreateAsync(user, Input.Password);
+
+            if (!result.Succeeded)
+            {
+                // Identity returns structured errors (duplicate email, weak
+                // password, and so on). Surface them as readable text.
+                errorMessage = string.Join(" ", result.Errors.Select(e => e.Description));
+                return;
+            }
+
+            Logger.LogInformation("New account created.");
+
+            await SignInManager.SignInAsync(user, isPersistent: false);
+            Nav.NavigateTo(SafeReturnUrl());
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Registration failed unexpectedly.");
+            errorMessage = "Something went wrong while creating your account. Please try again.";
+        }
+    }
+
+    /// <summary>Relative redirects only — see the note on the login page.</summary>
+    private string SafeReturnUrl()
+    {
+        if (string.IsNullOrWhiteSpace(ReturnUrl)) return "/";
+        if (ReturnUrl.StartsWith("//") || ReturnUrl.Contains("://")) return "/";
+        return ReturnUrl.StartsWith('/') ? ReturnUrl : "/" + ReturnUrl;
+    }
+
+    private sealed class RegisterInput
+    {
+        [Required(ErrorMessage = "Enter an email address.")]
+        [EmailAddress(ErrorMessage = "That doesn't look like a valid email address.")]
+        public string Email { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Choose a password.")]
+        [StringLength(100, MinimumLength = 6,
+            ErrorMessage = "Passwords need to be at least 6 characters.")]
+        [DataType(DataType.Password)]
+        public string Password { get; set; } = string.Empty;
+
+        [DataType(DataType.Password)]
+        [Compare(nameof(Password), ErrorMessage = "The two passwords don't match.")]
+        public string ConfirmPassword { get; set; } = string.Empty;
+    }
+}

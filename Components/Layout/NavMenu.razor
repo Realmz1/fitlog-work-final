@@ -1,0 +1,47 @@
+@using Microsoft.AspNetCore.Components.Authorization
+
+<div class="brand">
+    <span class="brand-mark" aria-hidden="true">💪</span>
+    <span class="brand-name">FitLog</span>
+</div>
+
+<nav class="nav" aria-label="Main navigation">
+    <NavLink class="nav-item" href="" Match="NavLinkMatch.All">
+        <span class="nav-ico" aria-hidden="true">📊</span> Dashboard
+    </NavLink>
+    <NavLink class="nav-item" href="log">
+        <span class="nav-ico" aria-hidden="true">➕</span> Log Workout
+    </NavLink>
+    <NavLink class="nav-item" href="exercises">
+        <span class="nav-ico" aria-hidden="true">🏋️</span> Exercises
+    </NavLink>
+    <NavLink class="nav-item" href="routines">
+        <span class="nav-ico" aria-hidden="true">📋</span> Routines
+    </NavLink>
+    <NavLink class="nav-item" href="history">
+        <span class="nav-ico" aria-hidden="true">🗓️</span> History
+    </NavLink>
+</nav>
+
+@*
+    Account strip. AuthorizeView renders one branch or the other depending on
+    whether the visitor is signed in. Sign-out posts to a plain endpoint so the
+    auth cookie is cleared on a real HTTP response.
+*@
+<div class="nav-account">
+    <AuthorizeView>
+        <Authorized>
+            <span class="nav-user" title="@context.User.Identity?.Name">
+                <span class="nav-ico" aria-hidden="true">👤</span>
+                @context.User.Identity?.Name
+            </span>
+            <form action="Account/Logout" method="post">
+                <AntiforgeryToken />
+                <button type="submit" class="btn btn-quiet btn-block">Sign out</button>
+            </form>
+        </Authorized>
+        <NotAuthorized>
+            <a class="btn btn-quiet btn-block" href="Account/Login">Sign in</a>
+        </NotAuthorized>
+    </AuthorizeView>
+</div>

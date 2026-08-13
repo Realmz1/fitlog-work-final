@@ -1,0 +1,191 @@
+@page "/log"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IDbContextFactory<FitLogDbContext> DbFactory
+
+<PageTitle>FitLog — Log Workout</PageTitle>
+
+<header class="page-head">
+    <h1>Log a Workout</h1>
+</header>
+
+@if (loading)
+{
+    <p class="muted">Loading…</p>
+}
+else if (exercises.Count == 0)
+{
+    <p class="muted">
+        You need at least one exercise first.
+        <a href="exercises">Add an exercise →</a>
+    </p>
+}
+else
+{
+    <section class="panel form-panel">
+        <EditForm Model="entry" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+
+            <div class="field-row">
+                <div class="field">
+                    <label>Exercise</label>
+                    <InputSelect class="input" @bind-Value="entry.ExerciseId">
+                        <option value="0" disabled>Choose…</option>
+                        @foreach (var ex in exercises)
+                        {
+                            <option value="@ex.Id">@ex.Name</option>
+                        }
+                    </InputSelect>
+                </div>
+                <div class="field">
+                    <label>Date</label>
+                    <InputDate class="input" @bind-Value="entry.Date" />
+                </div>
+            </div>
+
+            <div class="field-row">
+                <div class="field">
+                    <label>Sets</label>
+                    <InputNumber class="input" @bind-Value="entry.Sets" />
+                    <ValidationMessage For="() => entry.Sets" />
+                </div>
+                <div class="field">
+                    <label>Reps</label>
+                    <InputNumber class="input" @bind-Value="entry.Reps" />
+                    <ValidationMessage For="() => entry.Reps" />
+                </div>
+                <div class="field">
+                    <label>Weight</label>
+                    <InputNumber class="input" @bind-Value="entry.Weight" />
+                    <ValidationMessage For="() => entry.Weight" />
+                </div>
+            </div>
+
+            <div class="field">
+                <label>Routine (optional)</label>
+                <InputSelect class="input" @bind-Value="entry.RoutineId">
+                    <option value="">— none —</option>
+                    @foreach (var r in routines)
+                    {
+                        <option value="@r.Id">@r.Name</option>
+                    }
+                </InputSelect>
+            </div>
+
+            <div class="field">
+                <label>Notes</label>
+                <InputText class="input" @bind-Value="entry.Notes" />
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary" disabled="@(entry.ExerciseId == 0)">Save set</button>
+                <span class="muted">Volume: <strong>@entry.Volume.ToString("N0")</strong></span>
+            </div>
+        </EditForm>
+    </section>
+
+    @if (recent.Count > 0)
+    {
+        <section class="panel">
+            <h2>Just logged</h2>
+            <table class="table">
+                <thead>
+                    <tr><th>Exercise</th><th class="num">Sets×Reps</th><th class="num">Weight</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in recent)
+                    {
+                        <tr>
+                            <td>@r.ExerciseName</td>
+                            <td class="num">@r.Sets×@r.Reps</td>
+                            <td class="num">@r.Weight.ToString("N0")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+}
+
+<StatusBanner Message="@errorMessage" IsError="true" OnDismiss="@(() => errorMessage = string.Empty)" />
+<StatusBanner Message="@message" OnDismiss="@(() => message = string.Empty)" />
+
+@code {
+    private List<Exercise> exercises = new();
+    private List<Routine> routines = new();
+    private LogEntry entry = NewEntry();
+    private readonly List<RecentRow> recent = new();
+    private bool loading = true;
+    private string message = string.Empty;
+    private string errorMessage = string.Empty;
+
+    private record RecentRow(string ExerciseName, int Sets, int Reps, double Weight);
+
+    private static LogEntry NewEntry() => new() { Date = DateTime.Today, Sets = 3, Reps = 10 };
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            exercises = await db.Exercises.Where(e => !e.IsArchived).OrderBy(e => e.Name).ToListAsync();
+            routines = await db.Routines.OrderBy(r => r.Name).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Could not load the exercise list. " + ex.Message;
+            exercises = new();
+            routines = new();
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        message = string.Empty;
+        errorMessage = string.Empty;
+
+        if (entry.ExerciseId == 0)
+        {
+            errorMessage = "Choose an exercise before saving the set.";
+            return;
+        }
+
+        if (entry.Date.Date > DateTime.Today)
+        {
+            errorMessage = "You can't log a workout with a future date.";
+            return;
+        }
+
+        var name = exercises.FirstOrDefault(e => e.Id == entry.ExerciseId)?.Name ?? "Exercise";
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.LogEntries.Add(entry);
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex)
+        {
+            errorMessage = "The set could not be saved. " + (ex.InnerException?.Message ?? ex.Message);
+            return;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Something went wrong while saving your set. " + ex.Message;
+            return;
+        }
+
+        recent.Insert(0, new RecentRow(name, entry.Sets, entry.Reps, entry.Weight));
+        message = $"Logged {name}.";
+
+        // Reset for the next set, keeping the same date for convenience.
+        var lastDate = entry.Date;
+        entry = NewEntry();
+        entry.Date = lastDate;
+    }
+}
