@@ -1,9 +1,23 @@
 using FitLog.Components;
 using FitLog.Data;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Render (and most container hosts) terminate TLS at a reverse proxy and forward
+// plain HTTP to the app. Without honouring the X-Forwarded-* headers the app sees
+// scheme "http", refuses to issue the Secure auth cookie, and redirect-loops on
+// sign-in. KnownNetworks/KnownProxies are cleared because the proxy's address is
+// assigned dynamically by the platform.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 // Razor Components with interactive server-side rendering.
 builder.Services.AddRazorComponents()
@@ -65,6 +79,9 @@ builder.Services.ConfigureApplicationCookie(options =>
 
 var app = builder.Build();
 
+// Must run before any middleware that inspects the request scheme or host.
+app.UseForwardedHeaders();
+
 // Create the database (if needed) and seed sample data on startup.
 // NOTE: EnsureCreated() gets the project running with zero setup. To switch to
 // EF migrations, see the README ("Switching to migrations") - delete fitlog.db,
@@ -91,10 +108,12 @@ using (var scope = app.Services.CreateScope())
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
-    app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+// No UseHttpsRedirection or UseHsts here: the hosting proxy already terminates
+// TLS and serves the public site over HTTPS. Redirecting again inside the
+// container loops, because the forwarded request always arrives as plain HTTP.
+
 app.UseStaticFiles();
 
 app.UseAuthentication();
