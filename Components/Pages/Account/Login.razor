@@ -72,33 +72,42 @@
     {
         errorMessage = string.Empty;
 
+        Microsoft.AspNetCore.Identity.SignInResult result;
+
         try
         {
             // lockoutOnFailure protects against password guessing.
-            var result = await SignInManager.PasswordSignInAsync(
+            result = await SignInManager.PasswordSignInAsync(
                 Input.Email, Input.Password, Input.RememberMe, lockoutOnFailure: true);
-
-            if (result.Succeeded)
-            {
-                Logger.LogInformation("User signed in.");
-                Nav.NavigateTo(SafeReturnUrl());
-                return;
-            }
-
-            if (result.IsLockedOut)
-            {
-                errorMessage = "This account is temporarily locked after too many failed attempts. Try again in a few minutes.";
-                return;
-            }
-
-            // Deliberately vague: don't reveal whether the email exists.
-            errorMessage = "That email and password combination didn't work.";
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Sign-in failed unexpectedly.");
             errorMessage = "Something went wrong while signing you in. Please try again.";
+            return;
         }
+
+        if (result.IsLockedOut)
+        {
+            errorMessage = "This account is temporarily locked after too many failed attempts. Try again in a few minutes.";
+            return;
+        }
+
+        if (!result.Succeeded)
+        {
+            // Deliberately vague: don't reveal whether the email exists.
+            errorMessage = "That email and password combination didn't work.";
+            return;
+        }
+
+        Logger.LogInformation("User signed in.");
+
+        // Navigation is deliberately outside the try block. Blazor implements
+        // redirects by throwing NavigationException as a control-flow signal,
+        // which the framework catches to perform the redirect. Calling this
+        // inside a catch-all would swallow that signal and report a successful
+        // sign-in as a failure.
+        Nav.NavigateTo(SafeReturnUrl());
     }
 
     /// <summary>
